@@ -18,9 +18,14 @@ public:
         e = cudaGetDeviceProperties(&p, cfg_.device_id);
         if (e != cudaSuccess) { fprintf(stderr, "[runtime] getProps: %s\n", cudaGetErrorString(e)); return; }
         num_sms_ = p.multiProcessorCount;
-        // bandwidth = 2 (DDR) * memClock(Hz) * busWidth(bytes) / 1e9
-        const double mem_hz = (double)p.memoryClockRate * 1e3;
-        const double bus_bytes = p.memoryBusWidth / 8.0;
+        // bandwidth = 2 (DDR) * memClock(Hz) * busWidth(bytes) / 1e9.
+        // memoryClockRate/memoryBusWidth were removed from cudaDeviceProp in CUDA 13;
+        // query them via device attributes (portable across CUDA 12.x and 13.x).
+        int mem_clock_khz = 0, bus_width_bits = 0;
+        cudaDeviceGetAttribute(&mem_clock_khz,  cudaDevAttrMemoryClockRate,      cfg_.device_id);
+        cudaDeviceGetAttribute(&bus_width_bits, cudaDevAttrGlobalMemoryBusWidth, cfg_.device_id);
+        const double mem_hz = (double)mem_clock_khz * 1e3;
+        const double bus_bytes = bus_width_bits / 8.0;
         bandwidth_gbps_ = (float)(2.0 * mem_hz * bus_bytes / 1e9);
         cc_major_ = p.major; cc_minor_ = p.minor;
         printf("[runtime] %s  cc=%d.%d  SMs=%d  BW=%.0f GB/s\n",

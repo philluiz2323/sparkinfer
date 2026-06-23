@@ -378,6 +378,17 @@ bool Qwen35Model::load_gguf(const std::string& path) {
         if (!w.wq || !w.router_w || !w.gate_q || !w.up_q || !w.down_q) return false;
         if (i == 0 || i == c.n_layers - 1) fprintf(stderr, "[gguf] layer %d loaded\n", i);
     }
+    // The GGUF path never loads the shared-expert weights, yet forward_token() launches
+    // the shared FFN whenever n_shared > 0 (which is the default) — dereferencing the null
+    // w.shared_gate/up/down on the device. Detect whether the model actually has shared
+    // experts; if absent (e.g. Qwen3-30B-A3B) disabling them is simply correct, and if
+    // present warn that they are unsupported on the GGUF path. Either way, neutralize the
+    // shared FFN so decode never dereferences null weights.
+    if (s.cfg.n_shared > 0) {
+        if (g.tensor("blk.0.ffn_gate_shexp.weight"))
+            fprintf(stderr, "[gguf] shared experts present but unsupported on the GGUF path; disabling (n_shared=0)\n");
+        s.cfg.n_shared = 0;
+    }
     // decode scratch (mf_* / fa_*) is allocated in the constructor for all paths.
     return true;
 }

@@ -46,12 +46,32 @@ def areas_for_pr(repo, num):
     files = json.loads(gh(["pr", "view", str(num), "-R", repo, "--json", "files"]).stdout or "{}").get("files", [])
     return {f["path"].split("/", 1)[0] for f in files} & set(AREAS)
 
+def _owner_repo(repo):
+    parts = repo.split("/"); return parts[0], parts[1]
+
+def labels_on(repo, num):
+    owner, r = _owner_repo(repo)
+    out = subprocess.run(["gh", "api", f"repos/{owner}/{r}/issues/{num}/labels",
+                          "--jq", "[.[].name]"], capture_output=True, text=True)
+    try: return set(json.loads(out.stdout))
+    except Exception: return set()
+
+def add_label(repo, num, label):
+    owner, r = _owner_repo(repo)
+    subprocess.run(["gh", "api", f"repos/{owner}/{r}/issues/{num}/labels",
+                    "--method", "POST", "-f", f"labels[]={label}"],
+                   capture_output=True, text=True)
+
+def remove_label(repo, num, label):
+    owner, r = _owner_repo(repo)
+    subprocess.run(["gh", "api", f"repos/{owner}/{r}/issues/{num}/labels/{label}",
+                    "--method", "DELETE"], capture_output=True, text=True)
+
 def apply_area_labels(repo, num, areas):
     want = {f"area:{a}" for a in areas}
-    have = {l["name"] for l in json.loads(gh(["pr", "view", str(num), "-R", repo, "--json", "labels"]).stdout)["labels"]
-            if l["name"].startswith("area:")}
-    for lab in want - have: gh(["pr", "edit", str(num), "-R", repo, "--add-label", lab])
-    for lab in have - want: gh(["pr", "edit", str(num), "-R", repo, "--remove-label", lab])
+    have = {l for l in labels_on(repo, num) if l.startswith("area:")}
+    for lab in want - have: add_label(repo, num, lab)
+    for lab in have - want: remove_label(repo, num, lab)
 
 def render(res, oid):
     label = res.get("label", "?")
@@ -162,10 +182,9 @@ def main():
         if args.dry_run:
             print("--- dry-run, not posting ---\n" + body); continue
         if label:
-            for l in json.loads(gh(["pr", "view", str(num), "-R", args.repo, "--json", "labels"]).stdout)["labels"]:
-                if l["name"].startswith("eval:"):
-                    gh(["pr", "edit", str(num), "-R", args.repo, "--remove-label", l["name"]])
-            gh(["pr", "edit", str(num), "-R", args.repo, "--add-label", f"eval:{label}"])
+            for lab in {l for l in labels_on(args.repo, num) if l.startswith("eval:")}:
+                remove_label(args.repo, num, lab)
+            add_label(args.repo, num, f"eval:{label}")
         gh(["pr", "comment", str(num), "-R", args.repo, "--body", body])
         print(f"PR #{num}: posted {'eval:'+label if label else 'error'} — NOT merged.")
         if res: update_dashboard(args.repo, pr, areas, res)   # live dashboard: prs[] + frontier

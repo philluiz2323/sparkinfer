@@ -13,7 +13,7 @@ bench/scripts/label.py (deterministic) — this script only orchestrates.
 By default the instance is STOPPED after every eval: compute billing pauses while the disk and
 cached weights (/workspace/models) persist for a fast next run. --keep leaves it running.
 
-Self-healing: on --reuse, if the box won't become SSH-ready within --reuse-timeout (default 5 min),
+Self-healing: on --reuse, if the box won't become SSH-ready within --reuse-timeout (default 2 min),
 it is stopped and a fresh box is provisioned via the vast API automatically; the new id is saved to
 ~/.sparkinfer_vast_instance (VAST_INSTANCE_FILE) so the next run reuses it. --no-recreate disables this.
 
@@ -69,6 +69,8 @@ def funds():
     except Exception:
         return None
 
+LOADING_TIMEOUT = 300   # bail if stuck in "loading" longer than this (image pull hung)
+
 def bring_up(v, iid, deadline_s):
     """Start the instance if needed and wait until SSH-reachable, within deadline_s.
     Returns (host, port), or None if it never comes up (treat the box as dead/stuck)."""
@@ -80,16 +82,26 @@ def bring_up(v, iid, deadline_s):
         try: v.start_instance(id=iid)
         except Exception as e: print("  start:", str(e)[:150])
     deadline = time.time() + deadline_s
+    loading_since = None
     while time.time() < deadline:
         info = info_of(v, iid)
         st = (info or {}).get("actual_status")
         if info and st == "running" and (info.get("public_ipaddr") or info.get("ssh_host")):
+            loading_since = None
             host, port = endpoint(info)
             if wait_ssh(host, port, tries=4):     # box running; probe SSH (~40s), retry until deadline
                 print(f">> instance {iid}: ssh root@{host}:{port}")
                 return host, port
         else:
-            print(f"  instance {iid}: status={st or '?'} — waiting ...")
+            if st == "loading":
+                if loading_since is None: loading_since = time.time()
+                elapsed = int(time.time() - loading_since)
+                print(f"  instance {iid}: loading ({elapsed}s) — waiting ...")
+                if elapsed > LOADING_TIMEOUT:
+                    print(f">> instance {iid} stuck in 'loading' for >{LOADING_TIMEOUT}s — giving up")
+                    return None
+            else:
+                print(f"  instance {iid}: status={st or '?'} — waiting ...")
         time.sleep(15)
     print(f">> instance {iid} did not become SSH-ready within {deadline_s}s")
     return None
@@ -127,8 +139,8 @@ def main():
     ap.add_argument("--destroy", action="store_true", help="destroy after eval instead of stopping (also frees the disk)")
     ap.add_argument("--gpu", default="RTX_5090")
     ap.add_argument("--image", default=IMAGE)
-    ap.add_argument("--reuse-timeout", type=int, default=300, help="seconds to wait for a reused box before recreating (default 300 = 5 min)")
-    ap.add_argument("--new-timeout", type=int, default=900, help="seconds to wait for a freshly created box")
+    ap.add_argument("--reuse-timeout", type=int, default=120, help="seconds to wait for a reused box before recreating (default 120 = 2 min)")
+    ap.add_argument("--new-timeout", type=int, default=480, help="seconds to wait for a freshly created box (default 480 = 8 min)")
     ap.add_argument("--no-recreate", action="store_true", help="on reuse failure, error out instead of provisioning a new box")
     ap.add_argument("--destroy-on-error", action="store_true", help="destroy (not just stop) the instance if the eval produces no result")
     args = ap.parse_args()

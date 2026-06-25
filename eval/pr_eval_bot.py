@@ -30,6 +30,12 @@ def current_instance(default):
 # NOT a per-subsystem budget.
 AREAS = {"kernels", "runtime", "moe", "bench"}
 
+# RTX 5090 evaluation is OPT-IN: a maintainer reviews a PR and adds EVAL_GATE_LABEL to greenlight it
+# for the (expensive) on-device eval. PRs without it get NOT_TESTED_LABEL and are NOT evaluated — this
+# stops the bot burning GPU on unvetted / spam / gaming PRs before a human has looked at them.
+EVAL_GATE_LABEL = "test-on-5090"
+NOT_TESTED_LABEL = "not-tested"
+
 def gh(args):
     return subprocess.run(["gh"] + args, capture_output=True, text=True)
 
@@ -258,7 +264,7 @@ def main():
     # OLDEST-FIRST: evaluate ascending by PR number so the original of any duplicate is seen before
     # its copy, and the earliest submitter is graded first (fairness + copycat attribution).
     prs = json.loads(gh(["pr", "list", "-R", args.repo, "--state", "open",
-                         "--json", "number,headRefName,headRefOid,title,isCrossRepository"]).stdout or "[]")
+                         "--json", "number,headRefName,headRefOid,title,isCrossRepository,labels"]).stdout or "[]")
     prs.sort(key=lambda p: p["number"])
     if not prs:
         print("no open PRs"); return
@@ -324,6 +330,17 @@ def main():
         if not args.dry_run: apply_area_labels(args.repo, num, areas)
         if oid in evaluated_commits(args.repo, num):
             print(f"PR #{num} @ {oid}: already evaluated — skip eval"); continue
+        # Gate 3 — maintainer greenlight: only evaluate PRs a maintainer marked `test-on-5090`.
+        # Un-greenlit PRs get `not-tested` and are skipped (no GPU). Adding the gate label later
+        # triggers evaluation on the next poll (and the bot clears `not-tested`).
+        pr_labels = {l["name"] for l in pr.get("labels", [])}
+        if EVAL_GATE_LABEL not in pr_labels:
+            print(f"PR #{num}: not greenlit ({EVAL_GATE_LABEL} absent) — mark not-tested, skip eval")
+            if not args.dry_run and NOT_TESTED_LABEL not in pr_labels:
+                add_label(args.repo, num, NOT_TESTED_LABEL)
+            continue
+        if not args.dry_run and NOT_TESTED_LABEL in pr_labels:
+            remove_label(args.repo, num, NOT_TESTED_LABEL)   # greenlit now — clear the skip marker
         pending.append((pr, num, branch, oid, ref, areas))
 
     if not args.dry_run and state_changed:

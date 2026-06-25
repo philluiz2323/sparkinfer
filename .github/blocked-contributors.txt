@@ -1,0 +1,13 @@
+# Accounts blocked from sparkinfer for eval-gaming (sybil / coordinated emission farming).
+#
+# The PR auto-eval bot (eval/pr_eval_bot.py) reads this file. For any open PR whose opener
+# OR any commit author/committer appears below, the bot: applies the `flagged:gaming` label,
+# posts an explanatory comment, closes the PR, and SKIPS evaluation (no GPU, no score).
+#
+# One GitHub login per line (case-insensitive). Lines starting with # are comments.
+# Evidence and rationale for each entry: see .github/FLAGGED.md
+#
+# Maintainer-only file (see CODEOWNERS). Removing an entry un-blocks that account.
+
+glorysr1209-png
+seekmistar01

@@ -33,6 +33,50 @@ AREAS = {"kernels", "runtime", "moe", "bench"}
 def gh(args):
     return subprocess.run(["gh"] + args, capture_output=True, text=True)
 
+# ---- contributor denylist (eval-gaming / sybil block) ----
+# .github/blocked-contributors.txt lists GitHub logins (one per line, # = comment). A PR is blocked
+# if its opener OR any commit author/committer is listed. Blocked PRs are labeled, commented, closed,
+# and NOT evaluated. Evidence per account: .github/FLAGGED.md
+DENYLIST_FILE = os.path.join(ROOT, ".github", "blocked-contributors.txt")
+FLAG_LABEL = "flagged:gaming"
+
+def load_denylist():
+    try:
+        out = set()
+        for line in open(DENYLIST_FILE):
+            s = line.split("#", 1)[0].strip().lower()
+            if s: out.add(s)
+        return out
+    except Exception:
+        return set()
+
+def pr_involved_logins(repo, num):
+    """Every GitHub login tied to a PR: opener + each commit's author and committer."""
+    owner, r = _owner_repo(repo)
+    logins = set()
+    info = json.loads(gh(["pr", "view", str(num), "-R", repo, "--json", "author"]).stdout or "{}")
+    if info.get("author", {}).get("login"): logins.add(info["author"]["login"].lower())
+    out = subprocess.run(["gh", "api", f"repos/{owner}/{r}/pulls/{num}/commits",
+                          "--jq", ".[] | (.author.login // \"\") + \"\\n\" + (.committer.login // \"\")"],
+                         capture_output=True, text=True)
+    for l in (out.stdout or "").splitlines():
+        if l.strip(): logins.add(l.strip().lower())
+    return logins
+
+def close_blocked_pr(repo, num, hits):
+    """Label flagged:gaming, comment with the reason, and close the PR. Returns True on close."""
+    add_label(repo, num, FLAG_LABEL)
+    who = ", ".join(f"`{h}`" for h in sorted(hits))
+    body = ("<!-- sparkinfer-flagged -->\n"
+            "## 🚩 Flagged: eval-gaming\n\n"
+            f"This PR involves an account blocked for gaming the SN74 emission mechanism "
+            f"(sybil / coordinated duplicate farming): {who}.\n\n"
+            "Per the project's no-gaming policy these accounts are blocked: the PR is **not "
+            "evaluated, scored, or merged**. See [`.github/FLAGGED.md`]"
+            "(../blob/main/.github/FLAGGED.md) for the evidence and record.")
+    gh(["pr", "comment", str(num), "-R", repo, "--body", body])
+    return gh(["pr", "close", str(num), "-R", repo]).returncode == 0
+
 def evaluated_commits(repo, num):
     r = gh(["pr", "view", str(num), "-R", repo, "--json", "comments"])
     done = set()
@@ -155,10 +199,18 @@ def main():
         print("no open PRs"); return
 
     # Collect PRs that actually need evaluation before starting the GPU instance.
+    denylist = load_denylist()
     pending = []
     for pr in prs:
         num, branch, oid = pr["number"], pr["headRefName"], pr["headRefOid"][:7]
         ref = f"pull/{num}/head" if pr.get("isCrossRepository") else branch
+        # Blocked-contributor gate FIRST — never spend GPU on a flagged/sybil PR. If the PR's opener
+        # or any commit author/committer is denylisted, flag + close it and move on (no eval, no score).
+        hits = pr_involved_logins(args.repo, num) & denylist
+        if hits:
+            print(f"PR #{num}: BLOCKED (denylisted: {', '.join(sorted(hits))}) — flag + close, no eval")
+            if not args.dry_run: close_blocked_pr(args.repo, num, hits)
+            continue
         areas = areas_for_pr(args.repo, num)
         print(f"PR #{num} @ {oid}: areas={sorted(areas) or ['(none)']} ref={ref}")
         if not args.dry_run: apply_area_labels(args.repo, num, areas)

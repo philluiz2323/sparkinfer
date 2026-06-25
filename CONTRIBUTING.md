@@ -59,6 +59,10 @@ the PR (adds **`test-on-5090`**) and evaluates it on the next poll; until then i
 **`not-tested`** and does not evaluate. So fill in the template and tick the box when your PR is
 ready to be measured. (A maintainer can also add the `test-on-5090` label manually.)
 
+> ⚠️ Tick that box **only if you actually ran it on an RTX 5090** and pasted the benchmark log.
+> Checking it without testing is false attestation — it is treated as gaming and the account will
+> be **blocked** (added to the denylist), the same as copycatting or sybil farming.
+
 ## Maintainer-owned paths (eval, scoring & governance)
 
 The evaluation harness and scoring config are **maintainer-owned** and must not be changed

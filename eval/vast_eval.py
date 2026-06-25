@@ -245,10 +245,17 @@ def main():
 
     try:
         # pull/N/head refs (fork PRs) aren't fetched by default — need explicit fetch + FETCH_HEAD checkout.
+        # CRITICAL: force-clean the tree first. The eval step pins bench/scripts to origin/main, which
+        # leaves the worktree dirty; a plain `git checkout` then FAILS ("local changes would be
+        # overwritten") and silently leaves the box on the PREVIOUS PR's commit — so the next PR gets
+        # evaluated against stale code. `reset --hard` + `clean -fd` + `checkout -f` guarantees the
+        # working tree is exactly the requested ref. (Build dir lives under build/, model under
+        # /workspace — neither is touched by clean here since build/ is rm -rf'd by evaluate.sh.)
+        reset = "git reset -q --hard >/dev/null 2>&1; git clean -qfd bench >/dev/null 2>&1 || true"
         if args.ref.startswith("pull/") and args.ref.endswith("/head"):
-            checkout = f"git fetch -q origin '{args.ref}' && git checkout -q FETCH_HEAD"
+            checkout = f"{reset}; git fetch -q origin '{args.ref}' && git checkout -qf FETCH_HEAD"
         else:
-            checkout = f"git fetch -q origin '{args.ref}' 2>/dev/null || true && git checkout -q '{args.ref}'"
+            checkout = f"{reset}; git fetch -q origin '{args.ref}' 2>/dev/null || true && git checkout -qf '{args.ref}'"
         # g++-12: nvcc 12.8 breaks against Ubuntu 24.04's GCC 13.3 libstdc++ (cstdio /__gnu_cxx
         # errors). The build pins CMAKE_CUDA_HOST_COMPILER=g++-12, so it must be present.
         setup = ("export DEBIAN_FRONTEND=noninteractive; "
